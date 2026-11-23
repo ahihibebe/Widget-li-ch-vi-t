@@ -1,7 +1,20 @@
-name: Build APK Widget Lich
+name: Build Debug & Release APK
 
 on:
+  # Đẩy tag dạng v10.6.0 (hoặc tạo Release mới trên GitHub) => build và gắn APK vào Release đó
+  push:
+    tags:
+      - 'v*'
+  # Chạy tay: để trống "tag" nếu chỉ muốn build; nhập tag (ví dụ v10.6.0) để build và phát hành luôn
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag để phát hành (ví dụ v10.6.0). Để trống nếu chỉ build.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -9,13 +22,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Giai nen WidgetLich.zip
+      - name: Chuẩn bị mã nguồn
+        id: src
         run: |
           if [ -f WidgetLich.zip ]; then
             rm -rf project && mkdir project
             unzip -q WidgetLich.zip -d project
+            echo "dir=project" >> "$GITHUB_OUTPUT"
+          elif [ -f settings.gradle ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "Không thấy mã nguồn (cần WidgetLich.zip hoặc settings.gradle ở thư mục gốc repo)"
+            exit 1
           fi
-          test -f project/settings.gradle || { echo "Khong thay project (can file WidgetLich.zip o thu muc goc repo)"; exit 1; }
+
+      - name: Xác định tên phiên bản
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            V="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            V="${{ github.event.inputs.tag }}"
+          else
+            V="build-${{ github.run_number }}"
+          fi
+          echo "name=$V" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -26,11 +57,29 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
-        working-directory: project
-        run: gradle assembleDebug --no-daemon
+      - name: Build Debug và Release
+        working-directory: ${{ steps.src.outputs.dir }}
+        run: gradle assembleDebug assembleRelease --no-daemon
+
+      - name: Đổi tên APK
+        run: |
+          V="${{ steps.ver.outputs.name }}"
+          D="${{ steps.src.outputs.dir }}"
+          mkdir -p dist
+          cp "$D/app/build/outputs/apk/debug/app-debug.apk"     "dist/WidgetLich-${V}-debug.apk"
+          cp "$D/app/build/outputs/apk/release/app-release.apk" "dist/WidgetLich-${V}-release.apk"
+          ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: WidgetLich-APK
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          name: WidgetLich-APK-${{ steps.ver.outputs.name }}
+          path: dist/*.apk
+
+      - name: Gắn APK vào Release (theo tag)
+        if: github.ref_type == 'tag' || github.event.inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.name }}
+          name: Widget Lịch ${{ steps.ver.outputs.name }}
+          files: dist/*.apk
+          generate_release_notes: true
