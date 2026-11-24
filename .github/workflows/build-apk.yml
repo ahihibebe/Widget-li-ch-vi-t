@@ -1,20 +1,26 @@
-name: Build Debug & Release APK
+name: Build APK và đăng lên Releases
 
 on:
-  # Đẩy tag dạng v10.6.0 (hoặc tạo Release mới trên GitHub) => build và gắn APK vào Release đó
+  # Mỗi lần đẩy code (hoặc đẩy WidgetLich.zip mới) lên nhánh chính => tự build và đăng Releases.apk lên mục Releases
   push:
+    branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
     tags:
       - 'v*'
-  # Chạy tay: để trống "tag" nếu chỉ muốn build; nhập tag (ví dụ v10.6.0) để build và phát hành luôn
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag để phát hành (ví dụ v10.6.0). Để trống nếu chỉ build.'
+        description: 'Tag phát hành (ví dụ v10.6.0). Để trống = lấy theo versionName trong app/build.gradle.'
         required: false
         default: ''
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-apk
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -36,17 +42,20 @@ jobs:
             exit 1
           fi
 
-      - name: Xác định tên phiên bản
+      - name: Xác định tag phát hành
         id: ver
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            V="${{ github.ref_name }}"
-          elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            V="${{ github.event.inputs.tag }}"
+          D="${{ steps.src.outputs.dir }}"
+          VN=$(grep -oP "versionName '\K[^']+" "$D/app/build.gradle" | head -1)
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
           else
-            V="build-${{ github.run_number }}"
+            TAG="v${VN:-0.0.0}"
           fi
-          echo "name=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag phát hành: $TAG"
 
       - uses: actions/setup-java@v4
         with:
@@ -59,27 +68,28 @@ jobs:
 
       - name: Build Debug và Release
         working-directory: ${{ steps.src.outputs.dir }}
-        run: gradle assembleDebug assembleRelease --no-daemon
+        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
 
-      - name: Đổi tên APK
+      - name: Đặt tên file APK
         run: |
-          V="${{ steps.ver.outputs.name }}"
           D="${{ steps.src.outputs.dir }}"
           mkdir -p dist
-          cp "$D/app/build/outputs/apk/debug/app-debug.apk"     "dist/WidgetLich-${V}-debug.apk"
-          cp "$D/app/build/outputs/apk/release/app-release.apk" "dist/WidgetLich-${V}-release.apk"
+          cp "$D/app/build/outputs/apk/release/app-release.apk" dist/Releases.apk
+          cp "$D/app/build/outputs/apk/debug/app-debug.apk"     dist/Debug.apk
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: WidgetLich-APK-${{ steps.ver.outputs.name }}
+          name: WidgetLich-APK
           path: dist/*.apk
 
-      - name: Gắn APK vào Release (theo tag)
-        if: github.ref_type == 'tag' || github.event.inputs.tag != ''
+      - name: Đăng Releases.apk lên mục Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.name }}
-          name: Widget Lịch ${{ steps.ver.outputs.name }}
-          files: dist/*.apk
-          generate_release_notes: true
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Widget Lịch ${{ steps.ver.outputs.tag }}
+          files: |
+            dist/Releases.apk
+            dist/Debug.apk
+          overwrite_files: true
+          make_latest: true
